@@ -1,7 +1,10 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
+using System.Linq;
 using System.Numerics;
 using System.Text;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using ExileCore;
 using ExileCore.PoEMemory;
@@ -96,19 +99,31 @@ public class Threads : BaseSettingsPlugin<ThreadsSettings>
         RegexOptions.Compiled);
 
     private readonly Dictionary<string, (int Count, int Rarity, int Tank, int Dmg)> _leagues = new();
+    private readonly List<string> _mods = new();
     private readonly List<string> _rows = new();
     private readonly List<Vector2> _sizes = new();
     private readonly Overlay _overlay = new();
+    private uint _loggedHash;
     private int _syncCounter;
     private (int Width, float Scale) _layoutSig;
 
-    public override bool Initialise() => true;
+    private string LogPath => Path.Combine(ConfigDirectory, "maps.jsonl");
+
+    public override bool Initialise()
+    {
+        if (!File.Exists(LogPath)) return true;
+        try
+        {
+            var last = File.ReadLines(LogPath).LastOrDefault(l => l.Length > 0);
+            if (last != null && JsonDocument.Parse(last).RootElement.TryGetProperty("Hash", out var h)) _loggedHash = h.GetUInt32();
+        }
+        catch (JsonException) { }
+        return true;
+    }
 
     public override void Render()
     {
         if (Settings.ToggleKey.PressedOnce()) Settings.Show.Value = !Settings.Show.Value;
-        if (!Settings.Show) { _overlay.Release("threads"); return; }
-
         var sig = (Settings.Width, Settings.FontScale.Value);
         if (--_syncCounter <= 0 || sig != _layoutSig)
         {
@@ -117,35 +132,50 @@ public class Threads : BaseSettingsPlugin<ThreadsSettings>
             Sync();
         }
 
+        if (!Settings.Show) { _overlay.Release("threads"); return; }
         Draw();
     }
 
     private void Sync()
     {
         _rows.Clear();
+        _leagues.Clear();
+        _mods.Clear();
         var stats = GameController?.IngameState?.Data?.MapStats;
         if (stats == null) return;
         float wrap = (Settings.Width - Pad * 2) / Settings.FontScale.Value;
 
+        foreach (var (key, v) in stats)
+        {
+            if (v == 0) continue;
+            var m = LeagueStat.Match(key.ToString());
+            if (!m.Success) continue;
+            var league = m.Groups[1].Value;
+            _leagues.TryGetValue(league, out var e);
+            switch (m.Groups[2].Value)
+            {
+                case "ScarabCount": e.Count = v; break;
+                case "MonsterFromLeagueItemRarityPctPermyriad": e.Rarity = v; break;
+                case "MonsterDifficultyTankinessPct": e.Tank = v; break;
+                default: e.Dmg = v; break;
+            }
+            _leagues[league] = e;
+        }
+
+        GameStat last = default;
+        bool lastHit = false;
+        foreach (var (stat, min, league, text) in ThreadMods)
+        {
+            if (lastHit && stat == last) continue;
+            last = stat;
+            lastHit = stats.TryGetValue(stat, out var v) && v != 0 && v >= min;
+            if (lastHit) _mods.Add($"{league} Thread: {text.Replace("{0}", v.ToString())}");
+        }
+
+        if (Settings.LogMaps) Log();
+
         if (Settings.ShowLeagueCounts)
         {
-            _leagues.Clear();
-            foreach (var (key, v) in stats)
-            {
-                if (v == 0) continue;
-                var m = LeagueStat.Match(key.ToString());
-                if (!m.Success) continue;
-                var league = m.Groups[1].Value;
-                _leagues.TryGetValue(league, out var e);
-                switch (m.Groups[2].Value)
-                {
-                    case "ScarabCount": e.Count = v; break;
-                    case "MonsterFromLeagueItemRarityPctPermyriad": e.Rarity = v; break;
-                    case "MonsterDifficultyTankinessPct": e.Tank = v; break;
-                    default: e.Dmg = v; break;
-                }
-                _leagues[league] = e;
-            }
             foreach (var (league, e) in _leagues)
             {
                 var parts = new List<string>(3);
@@ -158,17 +188,20 @@ public class Threads : BaseSettingsPlugin<ThreadsSettings>
         }
 
         if (Settings.ShowThreadMods)
-        {
-            GameStat last = default;
-            bool lastHit = false;
-            foreach (var (stat, min, league, text) in ThreadMods)
-            {
-                if (lastHit && stat == last) continue;
-                last = stat;
-                lastHit = stats.TryGetValue(stat, out var v) && v != 0 && v >= min;
-                if (lastHit) Wrap($"{league} Thread: {text.Replace("{0}", v.ToString())}", wrap);
-            }
-        }
+            foreach (var mod in _mods) Wrap(mod, wrap);
+    }
+
+    private void Log()
+    {
+        var area = GameController.Area.CurrentArea;
+        if (area == null || area.IsTown || area.IsHideout || area.Hash == _loggedHash) return;
+        var threads = new Dictionary<string, int>();
+        foreach (var (league, e) in _leagues) if (e.Count > 0) threads[league] = e.Count;
+        if (threads.Count == 0 && _mods.Count == 0) return;
+        _loggedHash = area.Hash;
+        var entry = new { Time = DateTime.Now, Area = area.Name, Level = area.RealLevel, Hash = area.Hash, Threads = threads, Mods = _mods };
+        Directory.CreateDirectory(ConfigDirectory);
+        File.AppendAllText(LogPath, JsonSerializer.Serialize(entry) + Environment.NewLine);
     }
 
     private void Wrap(string text, float wrap)

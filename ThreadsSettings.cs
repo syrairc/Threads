@@ -22,6 +22,9 @@ public class ThreadsSettings : ISettings
     [Menu("Thread modifiers")]
     public ToggleNode ShowThreadMods { get; set; } = new ToggleNode(true);
 
+    [Menu("Log maps", "one line per map (area, level, threads, thread mods) to maps.jsonl in the plugin's config folder")]
+    public ToggleNode LogMaps { get; set; } = new ToggleNode(true);
+
     [Menu("Font scale")]
     public RangeNode<float> FontScale { get; set; } = new RangeNode<float>(1.2f, 0.5f, 3f);
 
