@@ -16,10 +16,6 @@
       <HintPath>$(exapiPackage)\ExileCore.dll</HintPath>
       <Private>False</Private>
     </Reference>
-    <Reference Include="GameOffsets">
-      <HintPath>$(exapiPackage)\GameOffsets.dll</HintPath>
-      <Private>False</Private>
-    </Reference>
     <Reference Include="Hexa.NET.ImGui">
       <HintPath>$(exapiPackage)\Hexa.NET.ImGui.dll</HintPath>
       <Private>False</Private>

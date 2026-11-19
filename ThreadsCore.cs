@@ -4,7 +4,6 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Numerics;
-using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using ExileCore;
@@ -13,6 +12,7 @@ using ExileCore.Shared.Enums;
 using ExileImGui;
 using Hexa.NET.ImGui;
 using Keys = System.Windows.Forms.Keys;
+using SColor = SharpDX.Color;
 
 namespace Threads;
 
@@ -20,6 +20,9 @@ public class Threads : BaseSettingsPlugin<ThreadsSettings>
 {
     private const int SyncFrames = 30;
     private const float Pad = 6f;
+    private const string PanelId = "threads";
+    private static readonly int[] AreaInfoPath = { 2, 0 };
+    private static readonly int[] ModListPath = { 2, 3, 0 };
 
     private static readonly (GameStat Stat, int Min, string League, string Text)[] ThreadMods =
     {
@@ -111,11 +114,9 @@ public class Threads : BaseSettingsPlugin<ThreadsSettings>
         RegexOptions.Compiled);
 
     private readonly Dictionary<string, (int Count, int Rarity, int Tank, int Dmg)> _leagues = new();
-    private readonly List<string> _mods = new();
-    private readonly List<int> _modIdx = new();
-    private readonly List<(string Text, SharpDX.Color? Color, float Scale)> _rows = new();
-    private readonly List<Vector2> _sizes = new();
-    private readonly Overlay _overlay = new();
+    private readonly List<(int Idx, string Text)> _mods = new();
+    private readonly List<(string Text, SColor? Color, float Scale, Vector2 Size)> _rows = new();
+    private readonly Overlay _overlay = new() { Locked = true };
     private uint _loggedHash;
     private int _syncCounter;
     private (int Width, float Scale) _layoutSig;
@@ -128,15 +129,18 @@ public class Threads : BaseSettingsPlugin<ThreadsSettings>
         try
         {
             var last = File.ReadLines(LogPath).LastOrDefault(l => l.Length > 0);
-            if (last != null && JsonDocument.Parse(last).RootElement.TryGetProperty("Hash", out var h)) _loggedHash = h.GetUInt32();
+            if (last == null) return true;
+            using var doc = JsonDocument.Parse(last);
+            if (doc.RootElement.TryGetProperty("Hash", out var h)) _loggedHash = h.GetUInt32();
         }
-        catch (JsonException) { }
+        catch (Exception ex) when (ex is JsonException or IOException) { }
         return true;
     }
 
     public override void Render()
     {
         if (Settings.ToggleKey.PressedOnce()) Settings.Show.Value = !Settings.Show.Value;
+        if (!Settings.Show && !Settings.LogMaps) { _overlay.Release(PanelId); return; }
         var sig = (Settings.Width, Settings.FontScale.Value);
         if (--_syncCounter <= 0 || sig != _layoutSig)
         {
@@ -145,7 +149,7 @@ public class Threads : BaseSettingsPlugin<ThreadsSettings>
             Sync();
         }
 
-        if (!Settings.Show) { _overlay.Release("threads"); return; }
+        if (!Settings.Show) { _overlay.Release(PanelId); return; }
         Draw();
     }
 
@@ -154,8 +158,7 @@ public class Threads : BaseSettingsPlugin<ThreadsSettings>
         _rows.Clear();
         _leagues.Clear();
         _mods.Clear();
-        _modIdx.Clear();
-        var stats = GameController?.IngameState?.Data?.MapStats;
+        var stats = GameController.IngameState?.Data?.MapStats;
         if (stats == null) return;
         float scale = Settings.FontScale.Value;
 
@@ -183,10 +186,9 @@ public class Threads : BaseSettingsPlugin<ThreadsSettings>
             var (stat, min, league, text) = ThreadMods[i];
             if (lastHit && stat == last) continue;
             last = stat;
-            lastHit = stats.TryGetValue(stat, out var v) && v != 0 && v >= min;
+            lastHit = stats.TryGetValue(stat, out var v) && v != 0 && (min == 0 || v >= min);
             if (!lastHit) continue;
-            _mods.Add($"{league} Thread: {text.Replace("{0}", v.ToString())}");
-            _modIdx.Add(i);
+            _mods.Add((i, $"{league} Thread: {text.Replace("{0}", v.ToString())}"));
         }
 
         if (Settings.LogMaps) Log();
@@ -205,11 +207,11 @@ public class Threads : BaseSettingsPlugin<ThreadsSettings>
         }
 
         if (Settings.ShowThreadMods)
-            for (int i = 0; i < _mods.Count; i++)
+            foreach (var (idx, text) in _mods)
             {
-                var s = Settings.Mods.GetValueOrDefault(ModKeys[_modIdx[i]]);
+                var s = Settings.Mods.GetValueOrDefault(ModKeys[idx]);
                 if (s?.Show == false) continue;
-                Wrap(_mods[i], s?.Color is int c ? new SharpDX.Color(c) : null, scale * (s?.Size ?? 1f));
+                Wrap(text, s?.Color is int c ? new SColor(c) : null, scale * (s?.Size ?? 1f));
             }
     }
 
@@ -226,55 +228,55 @@ public class Threads : BaseSettingsPlugin<ThreadsSettings>
         }
         if (threads.Count == 0 && _mods.Count == 0) return;
         _loggedHash = area.Hash;
-        var entry = new { Time = DateTime.Now, Area = area.Name, Level = area.RealLevel, Hash = area.Hash, Threads = threads, Monsters = monsters, Mods = _mods };
+        var entry = new { Time = DateTime.Now, Area = area.Name, Level = area.RealLevel, Hash = area.Hash, Threads = threads, Monsters = monsters, Mods = _mods.Select(m => m.Text) };
         Directory.CreateDirectory(ConfigDirectory);
         File.AppendAllText(LogPath, JsonSerializer.Serialize(entry) + Environment.NewLine);
     }
 
-    private void Wrap(string text, SharpDX.Color? color, float scale)
+    private void Wrap(string text, SColor? color, float scale)
     {
         float wrap = (Settings.Width - Pad * 2) / scale;
-        if (wrap <= 0f || ImGui.CalcTextSize(text).X <= wrap) { _rows.Add((text, color, scale)); return; }
-        var line = new StringBuilder();
+        var line = "";
         foreach (var word in text.Split(' '))
         {
-            if (line.Length == 0) { line.Append(word); continue; }
-            int keep = line.Length;
-            line.Append(' ').Append(word);
-            if (ImGui.CalcTextSize(line.ToString()).X <= wrap) continue;
-            line.Length = keep;
-            _rows.Add((line.ToString(), color, scale));
-            line.Clear().Append(word);
+            var next = line.Length == 0 ? word : line + " " + word;
+            if (line.Length > 0 && ImGui.CalcTextSize(next).X > wrap)
+            {
+                AddRow(line, color, scale);
+                next = word;
+            }
+            line = next;
         }
-        if (line.Length > 0) _rows.Add((line.ToString(), color, scale));
+        AddRow(line, color, scale);
     }
+
+    private void AddRow(string text, SColor? color, float scale) =>
+        _rows.Add((text, color, scale, ImGui.CalcTextSize(text) * scale));
 
     private unsafe void Draw()
     {
-        if (_rows.Count == 0) { _overlay.Release("threads"); return; }
+        if (_rows.Count == 0) { _overlay.Release(PanelId); return; }
 
         float gap = 2f * Settings.FontScale.Value;
-        _sizes.Clear();
-        float tall = 0f;
-        foreach (var row in _rows)
+        float tall = Pad * 2 - gap;
+        foreach (var row in _rows) tall += row.Size.Y + gap;
+
+        var anchor = Settings.AutoAnchor ? AnchorOrigin() : null;
+        var origin = anchor ?? new Vector2(Settings.PosX, Settings.PosY);
+        var size = new Vector2(Settings.Width, tall);
+        if (UiCovers(origin, origin + size)) { _overlay.Release(PanelId); return; }
+
+        bool hovered = false, active = false;
+        var edge = Overlay.ResizeEdge.None;
+        if (anchor == null)
         {
-            var sz = ImGui.CalcTextSize(row.Text) * row.Scale;
-            _sizes.Add(sz);
-            tall += sz.Y + gap;
+            _overlay.MoveHeld = Input.GetKeyState(Keys.LShiftKey) || Input.GetKeyState(Keys.RShiftKey);
+            (hovered, edge, active) = _overlay.Handle(PanelId, ref origin, size,
+                ref Settings.PosX, ref Settings.PosY, ref Settings.Width, 150, 3000);
+            if (hovered || active) Overlay.ClickBlocker(PanelId, origin, size);
         }
 
-        var origin = new Vector2(Settings.PosX, Settings.PosY);
-        var size = new Vector2(Settings.Width, tall - gap + Pad * 2);
-        if (UiCovers(origin, origin + size)) { _overlay.Release("threads"); return; }
-
-        _overlay.Locked = true;
-        _overlay.MoveHeld = Input.GetKeyState(Keys.LShiftKey) || Input.GetKeyState(Keys.RShiftKey);
-        var (hovered, edge, active) = _overlay.Handle("threads", ref origin, size,
-            ref Settings.PosX, ref Settings.PosY, ref Settings.Width, 150, 3000);
-        if (hovered || active) Overlay.ClickBlocker("threads", origin, size);
-
-        var mouse = ImGui.GetMousePos();
-        bool over = mouse.X >= origin.X && mouse.X <= origin.X + size.X && mouse.Y >= origin.Y && mouse.Y <= origin.Y + size.Y;
+        var (over, _) = Overlay.HitTest(ImGui.GetMousePos(), origin, size);
         float fade = over ? 1f : Settings.IdleOpacity.Value / 255f;
         if (fade <= 0f) return;
 
@@ -288,13 +290,24 @@ public class Threads : BaseSettingsPlugin<ThreadsSettings>
         float y = origin.Y + Pad;
         for (int i = 0; i < _rows.Count; i++)
         {
-            var (text, color, rowScale) = _rows[i];
+            var (text, color, rowScale, rowSize) = _rows[i];
             uint col = color is { } c ? EColor.U32(Fade(c, fade)) : baseCol;
             dl.AddText(font, fontSize * rowScale, new Vector2(origin.X + Pad, y), col, text);
-            y += _sizes[i].Y + gap;
+            y += rowSize.Y + gap;
         }
 
-        if (_overlay.Movable) Overlay.DragHint(origin, origin + size, active, hovered, edge);
+        if (anchor == null && _overlay.Movable) Overlay.DragHint(origin, origin + size, active, hovered, edge);
+    }
+
+    private Vector2? AnchorOrigin()
+    {
+        var map = GameController.IngameState?.IngameUi?.Map;
+        if (map == null) return null;
+        var mods = map.GetChildFromIndices(ModListPath);
+        var list = mods is { IsVisible: true } ? mods : map.GetChildFromIndices(AreaInfoPath);
+        if (list is not { IsVisible: true }) return null;
+        var r = list.GetClientRectCache;
+        return r.Width > 0 ? new Vector2(r.Right - Settings.Width, r.Bottom + Pad) : null;
     }
 
     public override void DrawSettings()
@@ -303,14 +316,12 @@ public class Threads : BaseSettingsPlugin<ThreadsSettings>
         if (ImGui.BeginTabItem("General"))
         {
             base.DrawSettings();
-            try { DrawLogButtons(); }
-            catch (Exception ex) { LogError($"Threads map log action failed: {ex.Message}"); }
+            DrawLogButtons();
             ImGui.EndTabItem();
         }
         if (ImGui.BeginTabItem("Customization"))
         {
-            try { DrawCustomization(); }
-            catch (Exception ex) { LogError($"Threads customization failed: {ex.Message}"); }
+            DrawCustomization();
             ImGui.EndTabItem();
         }
         ImGui.EndTabBar();
@@ -326,26 +337,28 @@ public class Threads : BaseSettingsPlugin<ThreadsSettings>
         }
         ImGui.SameLine();
         ImGui.BeginDisabled(!File.Exists(LogPath));
-        if (ImGui.Button("Archive"))
-        {
-            File.Move(LogPath, Path.Combine(ConfigDirectory, $"maps-{DateTime.Now:yyyyMMdd-HHmmss}.jsonl"));
-            _loggedHash = 0;
-        }
+        bool archive = ImGui.Button("Archive");
         ImGui.SetItemTooltip("Renames maps.jsonl to maps-<date>.jsonl - logging starts a fresh file");
         ImGui.SameLine();
         if (ImGui.Button("Delete")) ImGui.OpenPopup("##threads_delete_log");
         ImGui.EndDisabled();
-        if (!ImGui.BeginPopup("##threads_delete_log")) return;
-        ImGui.TextUnformatted("Delete maps.jsonl? Archives are kept.");
-        if (ImGui.Button("Delete"))
+        bool delete = false;
+        if (ImGui.BeginPopup("##threads_delete_log"))
         {
-            File.Delete(LogPath);
-            _loggedHash = 0;
-            ImGui.CloseCurrentPopup();
+            ImGui.TextUnformatted("Delete maps.jsonl? Archives are kept.");
+            delete = ImGui.Button("Delete");
+            ImGui.SameLine();
+            if (ImGui.Button("Cancel") || delete) ImGui.CloseCurrentPopup();
+            ImGui.EndPopup();
         }
-        ImGui.SameLine();
-        if (ImGui.Button("Cancel")) ImGui.CloseCurrentPopup();
-        ImGui.EndPopup();
+        if (!archive && !delete) return;
+        try
+        {
+            if (archive) File.Move(LogPath, Path.Combine(ConfigDirectory, $"maps-{DateTime.Now:yyyyMMdd-HHmmss}.jsonl"));
+            else File.Delete(LogPath);
+            _loggedHash = 0;
+        }
+        catch (Exception ex) { LogError($"Threads map log action failed: {ex.Message}"); }
     }
 
     private void DrawCustomization()
@@ -366,7 +379,7 @@ public class Threads : BaseSettingsPlugin<ThreadsSettings>
             {
                 var key = ModKeys[i];
                 var s = Settings.Mods.GetValueOrDefault(key) ?? new ModStyle();
-                var col = s.Color is int c ? EColor.ToVector4(new SharpDX.Color(c)) : baseCol;
+                var col = s.Color is int c ? EColor.ToVector4(new SColor(c)) : baseCol;
                 bool changed = false, reset = false;
                 ImGui.PushID(key);
                 ImGui.TableNextRow();
@@ -398,15 +411,16 @@ public class Threads : BaseSettingsPlugin<ThreadsSettings>
         }
     }
 
-    private static SharpDX.Color Fade(SharpDX.Color c, float f) => f >= 1f ? c : new SharpDX.Color(c.R, c.G, c.B, (byte)(c.A * f));
+    private static SColor Fade(SColor c, float f) => f >= 1f ? c : new SColor(c.R, c.G, c.B, (byte)(c.A * f));
 
     private bool UiCovers(Vector2 min, Vector2 max)
     {
-        var ui = GameController?.IngameState?.IngameUi;
+        var ui = GameController.IngameState?.IngameUi;
         if (ui == null) return false;
+        if (Overlaps(ui.OpenLeftPanel, min, max) || Overlaps(ui.OpenRightPanel, min, max)) return true;
         foreach (var p in ui.LargePanels) if (p?.IsVisible == true) return true;
         foreach (var p in ui.FullscreenPanels) if (Overlaps(p, min, max)) return true;
-        return Overlaps(ui.OpenLeftPanel, min, max) || Overlaps(ui.OpenRightPanel, min, max);
+        return false;
     }
 
     private static bool Overlaps(Element e, Vector2 min, Vector2 max)

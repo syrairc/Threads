@@ -17,6 +17,9 @@ public class ThreadsSettings : ISettings
     [Menu("Toggle key")]
     public HotkeyNodeV2 ToggleKey { get; set; } = new HotkeyNodeV2(Keys.None);
 
+    [Menu("Anchor under game modifiers", "Right-aligned below the game's area modifier list, follows it as it grows. Turn off to move (Shift+drag) or resize (Shift+drag right edge) freely")]
+    public ToggleNode AutoAnchor { get; set; } = new ToggleNode(true);
+
     [Menu("League thread counts", "Threads xN plus the monster rarity / toughness / damage they add")]
     public ToggleNode ShowLeagueCounts { get; set; } = new ToggleNode(true);
 
