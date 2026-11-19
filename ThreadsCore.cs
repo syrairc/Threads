@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Numerics;
@@ -50,12 +51,14 @@ public class Threads : BaseSettingsPlugin<ThreadsSettings>
         (GameStat.MapFinalRitualBodachArena, 0, "Ritual", "Final Ritual is a Bodach arena"),
         (GameStat.MapRitualFinalRitualExpendTributeForBoss, 0, "Ritual", "Final Ritual can spend Tribute to summon a Boss"),
         (GameStat.MapRitualGainBloodShrineOnCompletion, 0, "Ritual", "Completing a Ritual grants a Blood Shrine"),
+        (GameStat.MapRitualRewardCountPct, 0, "Ritual", "{0}% increased number of Ritual rewards"),
         (GameStat.MapBetrayalStandaloneCatarina, 0, "Betrayal", "Catarina appears on her own"),
         (GameStat.MapBetrayalEncounterGrantBuffs, 0, "Betrayal", "Encounters grant Buffs"),
         (GameStat.MapBetrayalSpawnCorpseSculpture, 0, "Betrayal", "Spawns a Corpse Sculpture"),
         (GameStat.MapBetrayalMembersXAdditionalMods, 0, "Betrayal", "Syndicate Members have {0} additional Modifiers"),
         (GameStat.MapBetrayalPctChanceVeiledItemsToDropWithFracturedVeiledMod, 0, "Betrayal", "{0}% chance for Veiled Items to drop with a Fractured Veiled Modifier"),
         (GameStat.MapBetrayalSpawnResearchChestClusters, 0, "Betrayal", "{0} Research Chest clusters"),
+        ((GameStat)23636, 0, "Betrayal", "Initial Syndicate targets have {0} additional Rare Bodyguards"),
         (GameStat.MapFinalAbyssPitSpawnAbyssMiniboss, 0, "Abyss", "{0}% chance for the final Abyss Pit to spawn a Consort"),
         (GameStat.MapNumExtraAbysses, 0, "Abyss", "{0} additional Abyss(es)"),
         (GameStat.MapAbyssEliteMonstersPaired, 0, "Abyss", "{0}% chance for Elite Monsters to come in pairs"),
@@ -69,6 +72,7 @@ public class Threads : BaseSettingsPlugin<ThreadsSettings>
         (GameStat.MapIncursionContainsTempests, 0, "Incursion", "Contains Tempests"),
         (GameStat.MapAlvaCursedTreasure, 0, "Incursion", "Contains Cursed Treasure"),
         (GameStat.MapIncursionsSpawnSpecialMonster, 0, "Incursion", "Spawns the Flesh Merchant"),
+        ((GameStat)23638, 0, "Incursion", "Architects gain {0} Rare Bodyguard(s) per previous Incursion"),
         (GameStat.MapLegionLeagueExtraSpawns, 0, "Legion", "{0} additional Legion encounter(s)"),
         (GameStat.MapLegionMultipleBreakoutChancePct, 0, "Legion", "{0}% chance for Eternal Conflict (multiple Breakouts)"),
         (GameStat.MapLegionLeagueForceGeneral, 0, "Legion", "Always has a General, 50% chance for both Generals"),
@@ -84,6 +88,7 @@ public class Threads : BaseSettingsPlugin<ThreadsSettings>
         (GameStat.MapBestiaryBeastsHaveXWispsOfAllTypes, 0, "Bestiary", "Beasts are imbued with Wisps of all types"),
         (GameStat.MapBestiaryEinharBloodExplodeAura, 0, "Bestiary", "Einhar has an exploding Blood Aura"),
         (GameStat.MapBestiaryYellowBeastsAreHulks, 0, "Bestiary", "Yellow Beasts are replaced with Azmeri Hulks"),
+        (GameStat.MapBestiaryBeastsXAdditionalModifiers, 0, "Bestiary", "Beasts have {0} additional Modifier(s)"),
         (GameStat.MapBreachRareAdditionalWombgiftChancePct, 0, "Breach", "Rare Breach Monsters have {0}% chance to drop an additional Wombgift"),
         (GameStat.MapUnstableBreachSpawnsBoss, 0, "Breach", "Unstable Breaches spawn a Boss"),
         (GameStat.MapBreachHiveIsAlwaysSkyFortress, 0, "Breach", "Hives are always a Sky Fortress"),
@@ -92,7 +97,14 @@ public class Threads : BaseSettingsPlugin<ThreadsSettings>
         (GameStat.MapBreachHivesContainSpreadCoffers, 0, "Breach", "Hives contain Spread Coffers"),
         (GameStat.MapBreachRaresXAdditionalBreachMods, 0, "Breach", "Rare Breach Monsters have {0} additional Breach Modifier(s)"),
         (GameStat.MapBreachEmpoweredAilithSkills, 0, "Breach", "Ailith's Skills are Empowered"),
+        ((GameStat)23631, 0, "Breach", "Magic Breach Monsters have {0} additional Modifier(s)"),
+        ((GameStat)23634, 0, "Breach", "The final Rare Breach Monsters are duplicated"),
     };
+
+    private static readonly string[] ModKeys = ThreadMods.Select(m => $"{m.Stat}:{m.Min}").ToArray();
+
+    private static readonly IGrouping<string, int>[] ModGroups =
+        Enumerable.Range(0, ThreadMods.Length).GroupBy(i => ThreadMods[i].League).ToArray();
 
     private static readonly Regex LeagueStat = new(
         @"^Map(\w+?)(ScarabCount|MonsterFromLeagueItemRarityPctPermyriad|MonsterDifficultyTankinessPct|MonsterDamagePct)$",
@@ -100,7 +112,8 @@ public class Threads : BaseSettingsPlugin<ThreadsSettings>
 
     private readonly Dictionary<string, (int Count, int Rarity, int Tank, int Dmg)> _leagues = new();
     private readonly List<string> _mods = new();
-    private readonly List<string> _rows = new();
+    private readonly List<int> _modIdx = new();
+    private readonly List<(string Text, SharpDX.Color? Color, float Scale)> _rows = new();
     private readonly List<Vector2> _sizes = new();
     private readonly Overlay _overlay = new();
     private uint _loggedHash;
@@ -141,9 +154,10 @@ public class Threads : BaseSettingsPlugin<ThreadsSettings>
         _rows.Clear();
         _leagues.Clear();
         _mods.Clear();
+        _modIdx.Clear();
         var stats = GameController?.IngameState?.Data?.MapStats;
         if (stats == null) return;
-        float wrap = (Settings.Width - Pad * 2) / Settings.FontScale.Value;
+        float scale = Settings.FontScale.Value;
 
         foreach (var (key, v) in stats)
         {
@@ -164,12 +178,15 @@ public class Threads : BaseSettingsPlugin<ThreadsSettings>
 
         GameStat last = default;
         bool lastHit = false;
-        foreach (var (stat, min, league, text) in ThreadMods)
+        for (int i = 0; i < ThreadMods.Length; i++)
         {
+            var (stat, min, league, text) = ThreadMods[i];
             if (lastHit && stat == last) continue;
             last = stat;
             lastHit = stats.TryGetValue(stat, out var v) && v != 0 && v >= min;
-            if (lastHit) _mods.Add($"{league} Thread: {text.Replace("{0}", v.ToString())}");
+            if (!lastHit) continue;
+            _mods.Add($"{league} Thread: {text.Replace("{0}", v.ToString())}");
+            _modIdx.Add(i);
         }
 
         if (Settings.LogMaps) Log();
@@ -180,15 +197,20 @@ public class Threads : BaseSettingsPlugin<ThreadsSettings>
             {
                 var parts = new List<string>(3);
                 if (e.Rarity != 0) parts.Add($"{e.Rarity / 100f:+0.#;-0.#}% item rarity");
-                if (e.Tank != 0) parts.Add($"{e.Tank:+0;-0}% tankiness");
+                if (e.Tank != 0) parts.Add($"{e.Tank:+0;-0}% toughness");
                 if (e.Dmg != 0) parts.Add($"{e.Dmg:+0;-0}% damage");
                 var head = e.Count > 0 ? $"{league} Threads x{e.Count}" : league;
-                Wrap(parts.Count == 0 ? head : $"{head}: monsters {string.Join(", ", parts)}", wrap);
+                Wrap(parts.Count == 0 ? head : $"{head}: monsters {string.Join(", ", parts)}", null, scale);
             }
         }
 
         if (Settings.ShowThreadMods)
-            foreach (var mod in _mods) Wrap(mod, wrap);
+            for (int i = 0; i < _mods.Count; i++)
+            {
+                var s = Settings.Mods.GetValueOrDefault(ModKeys[_modIdx[i]]);
+                if (s?.Show == false) continue;
+                Wrap(_mods[i], s?.Color is int c ? new SharpDX.Color(c) : null, scale * (s?.Size ?? 1f));
+            }
     }
 
     private void Log()
@@ -196,17 +218,23 @@ public class Threads : BaseSettingsPlugin<ThreadsSettings>
         var area = GameController.Area.CurrentArea;
         if (area == null || area.IsTown || area.IsHideout || area.Hash == _loggedHash) return;
         var threads = new Dictionary<string, int>();
-        foreach (var (league, e) in _leagues) if (e.Count > 0) threads[league] = e.Count;
+        var monsters = new Dictionary<string, object>();
+        foreach (var (league, e) in _leagues)
+        {
+            if (e.Count > 0) threads[league] = e.Count;
+            monsters[league] = new { Rarity = e.Rarity / 100f, Toughness = e.Tank, Damage = e.Dmg };
+        }
         if (threads.Count == 0 && _mods.Count == 0) return;
         _loggedHash = area.Hash;
-        var entry = new { Time = DateTime.Now, Area = area.Name, Level = area.RealLevel, Hash = area.Hash, Threads = threads, Mods = _mods };
+        var entry = new { Time = DateTime.Now, Area = area.Name, Level = area.RealLevel, Hash = area.Hash, Threads = threads, Monsters = monsters, Mods = _mods };
         Directory.CreateDirectory(ConfigDirectory);
         File.AppendAllText(LogPath, JsonSerializer.Serialize(entry) + Environment.NewLine);
     }
 
-    private void Wrap(string text, float wrap)
+    private void Wrap(string text, SharpDX.Color? color, float scale)
     {
-        if (wrap <= 0f || ImGui.CalcTextSize(text).X <= wrap) { _rows.Add(text); return; }
+        float wrap = (Settings.Width - Pad * 2) / scale;
+        if (wrap <= 0f || ImGui.CalcTextSize(text).X <= wrap) { _rows.Add((text, color, scale)); return; }
         var line = new StringBuilder();
         foreach (var word in text.Split(' '))
         {
@@ -215,23 +243,22 @@ public class Threads : BaseSettingsPlugin<ThreadsSettings>
             line.Append(' ').Append(word);
             if (ImGui.CalcTextSize(line.ToString()).X <= wrap) continue;
             line.Length = keep;
-            _rows.Add(line.ToString());
+            _rows.Add((line.ToString(), color, scale));
             line.Clear().Append(word);
         }
-        if (line.Length > 0) _rows.Add(line.ToString());
+        if (line.Length > 0) _rows.Add((line.ToString(), color, scale));
     }
 
     private unsafe void Draw()
     {
         if (_rows.Count == 0) { _overlay.Release("threads"); return; }
 
-        float scale = Settings.FontScale.Value;
-        float gap = 2f * scale;
+        float gap = 2f * Settings.FontScale.Value;
         _sizes.Clear();
         float tall = 0f;
         foreach (var row in _rows)
         {
-            var sz = ImGui.CalcTextSize(row) * scale;
+            var sz = ImGui.CalcTextSize(row.Text) * row.Scale;
             _sizes.Add(sz);
             tall += sz.Y + gap;
         }
@@ -255,17 +282,120 @@ public class Threads : BaseSettingsPlugin<ThreadsSettings>
         Overlay.Chrome(dl, origin, origin + size, Fade(Settings.BackColor, fade), Fade(Settings.BorderColor, fade),
             Settings.BorderThickness.Value);
 
-        uint col = EColor.U32(Fade(Settings.TextColor, fade));
+        uint baseCol = EColor.U32(Fade(Settings.TextColor, fade));
         var font = ImGui.GetFont();
-        float fontSize = ImGui.GetFontSize() * scale;
+        float fontSize = ImGui.GetFontSize();
         float y = origin.Y + Pad;
         for (int i = 0; i < _rows.Count; i++)
         {
-            dl.AddText(font, fontSize, new Vector2(origin.X + Pad, y), col, _rows[i]);
+            var (text, color, rowScale) = _rows[i];
+            uint col = color is { } c ? EColor.U32(Fade(c, fade)) : baseCol;
+            dl.AddText(font, fontSize * rowScale, new Vector2(origin.X + Pad, y), col, text);
             y += _sizes[i].Y + gap;
         }
 
         if (_overlay.Movable) Overlay.DragHint(origin, origin + size, active, hovered, edge);
+    }
+
+    public override void DrawSettings()
+    {
+        if (!ImGui.BeginTabBar("##threads_tabs")) return;
+        if (ImGui.BeginTabItem("General"))
+        {
+            base.DrawSettings();
+            try { DrawLogButtons(); }
+            catch (Exception ex) { LogError($"Threads map log action failed: {ex.Message}"); }
+            ImGui.EndTabItem();
+        }
+        if (ImGui.BeginTabItem("Customization"))
+        {
+            try { DrawCustomization(); }
+            catch (Exception ex) { LogError($"Threads customization failed: {ex.Message}"); }
+            ImGui.EndTabItem();
+        }
+        ImGui.EndTabBar();
+    }
+
+    private void DrawLogButtons()
+    {
+        ImGui.SeparatorText("Map log");
+        if (ImGui.Button("Open folder"))
+        {
+            Directory.CreateDirectory(ConfigDirectory);
+            Process.Start("explorer.exe", $"\"{ConfigDirectory}\"");
+        }
+        ImGui.SameLine();
+        ImGui.BeginDisabled(!File.Exists(LogPath));
+        if (ImGui.Button("Archive"))
+        {
+            File.Move(LogPath, Path.Combine(ConfigDirectory, $"maps-{DateTime.Now:yyyyMMdd-HHmmss}.jsonl"));
+            _loggedHash = 0;
+        }
+        ImGui.SetItemTooltip("Renames maps.jsonl to maps-<date>.jsonl - logging starts a fresh file");
+        ImGui.SameLine();
+        if (ImGui.Button("Delete")) ImGui.OpenPopup("##threads_delete_log");
+        ImGui.EndDisabled();
+        if (!ImGui.BeginPopup("##threads_delete_log")) return;
+        ImGui.TextUnformatted("Delete maps.jsonl? Archives are kept.");
+        if (ImGui.Button("Delete"))
+        {
+            File.Delete(LogPath);
+            _loggedHash = 0;
+            ImGui.CloseCurrentPopup();
+        }
+        ImGui.SameLine();
+        if (ImGui.Button("Cancel")) ImGui.CloseCurrentPopup();
+        ImGui.EndPopup();
+    }
+
+    private void DrawCustomization()
+    {
+        ImGui.TextDisabled("Unset color = General text color, size multiplies the General font scale");
+        var baseCol = EColor.ToVector4(Settings.TextColor);
+        foreach (var group in ModGroups)
+        {
+            if (!ImGui.CollapsingHeader(group.Key)) continue;
+            if (!ImGui.BeginTable($"##mods_{group.Key}", 5, ImGuiTableFlags.RowBg | ImGuiTableFlags.SizingFixedFit)) continue;
+            ImGui.TableSetupColumn("Show");
+            ImGui.TableSetupColumn("Color");
+            ImGui.TableSetupColumn("Size");
+            ImGui.TableSetupColumn("Modifier", ImGuiTableColumnFlags.WidthStretch);
+            ImGui.TableSetupColumn("");
+            ImGui.TableHeadersRow();
+            foreach (var i in group)
+            {
+                var key = ModKeys[i];
+                var s = Settings.Mods.GetValueOrDefault(key) ?? new ModStyle();
+                var col = s.Color is int c ? EColor.ToVector4(new SharpDX.Color(c)) : baseCol;
+                bool changed = false, reset = false;
+                ImGui.PushID(key);
+                ImGui.TableNextRow();
+                ImGui.TableNextColumn();
+                changed |= ImGui.Checkbox("##show", ref s.Show);
+                ImGui.TableNextColumn();
+                if (ImGui.ColorEdit4("##color", ref col, ImGuiColorEditFlags.NoInputs | ImGuiColorEditFlags.AlphaBar))
+                {
+                    s.Color = EColor.FromVector4(col).ToRgba();
+                    changed = true;
+                }
+                ImGui.TableNextColumn();
+                ImGui.SetNextItemWidth(110);
+                changed |= ImGui.SliderFloat("##size", ref s.Size, 0.5f, 3f, "%.2fx");
+                ImGui.TableNextColumn();
+                var label = ThreadMods[i].Text.Replace("{0}", "#");
+                if (s.Show) ImGui.PushStyleColor(ImGuiCol.Text, col); else ImGui.BeginDisabled();
+                ImGui.TextUnformatted(label);
+                if (s.Show) ImGui.PopStyleColor(); else ImGui.EndDisabled();
+                ImGui.TableNextColumn();
+                if (Settings.Mods.ContainsKey(key)) reset = ImGui.SmallButton("Reset");
+                ImGui.PopID();
+
+                if (reset || (changed && s.Show && s.Color == null && s.Size == 1f)) Settings.Mods.Remove(key);
+                else if (changed) Settings.Mods[key] = s;
+                if (reset || changed) _syncCounter = 0;
+            }
+            ImGui.EndTable();
+        }
     }
 
     private static SharpDX.Color Fade(SharpDX.Color c, float f) => f >= 1f ? c : new SharpDX.Color(c.R, c.G, c.B, (byte)(c.A * f));

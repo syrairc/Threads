@@ -1,4 +1,5 @@
-﻿using System.Windows.Forms;
+﻿using System.Collections.Generic;
+using System.Windows.Forms;
 using ExileCore.Shared.Attributes;
 using ExileCore.Shared.Interfaces;
 using ExileCore.Shared.Nodes;
@@ -16,13 +17,13 @@ public class ThreadsSettings : ISettings
     [Menu("Toggle key")]
     public HotkeyNodeV2 ToggleKey { get; set; } = new HotkeyNodeV2(Keys.None);
 
-    [Menu("League thread counts", "Threads xN plus the monster rarity / tankiness / damage they add")]
+    [Menu("League thread counts", "Threads xN plus the monster rarity / toughness / damage they add")]
     public ToggleNode ShowLeagueCounts { get; set; } = new ToggleNode(true);
 
     [Menu("Thread modifiers")]
     public ToggleNode ShowThreadMods { get; set; } = new ToggleNode(true);
 
-    [Menu("Log maps", "one line per map (area, level, threads, thread mods) to maps.jsonl in the plugin's config folder")]
+    [Menu("Log maps", "one line per map (area, level, threads, monster rarity / toughness / damage, thread mods) to maps.jsonl in the plugin's config folder")]
     public ToggleNode LogMaps { get; set; } = new ToggleNode(true);
 
     [Menu("Font scale")]
@@ -46,4 +47,12 @@ public class ThreadsSettings : ISettings
     public int PosX = 1500;
     public int PosY = 300;
     public int Width = 500;
+    public Dictionary<string, ModStyle> Mods = new();
+}
+
+public class ModStyle
+{
+    public bool Show = true;
+    public int? Color;
+    public float Size = 1f;
 }
