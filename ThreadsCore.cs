@@ -202,7 +202,7 @@ public class Threads : BaseSettingsPlugin<ThreadsSettings>
                 if (e.Tank != 0) parts.Add($"{e.Tank:+0;-0}% toughness");
                 if (e.Dmg != 0) parts.Add($"{e.Dmg:+0;-0}% damage");
                 var head = e.Count > 0 ? $"{league} Threads x{e.Count}" : league;
-                Wrap(parts.Count == 0 ? head : $"{head}: monsters {string.Join(", ", parts)}", null, scale);
+                AddRows(parts.Count == 0 ? head : $"{head}: monsters {string.Join(", ", parts)}", null, scale);
             }
         }
 
@@ -211,7 +211,7 @@ public class Threads : BaseSettingsPlugin<ThreadsSettings>
             {
                 var s = Settings.Mods.GetValueOrDefault(ModKeys[idx]);
                 if (s?.Show == false) continue;
-                Wrap(text, s?.Color is int c ? new SColor(c) : null, scale * (s?.Size ?? 1f));
+                AddRows(text, s?.Color is int c ? new SColor(c) : null, scale * (s?.Size ?? 1f));
             }
     }
 
@@ -233,25 +233,11 @@ public class Threads : BaseSettingsPlugin<ThreadsSettings>
         File.AppendAllText(LogPath, JsonSerializer.Serialize(entry) + Environment.NewLine);
     }
 
-    private void Wrap(string text, SColor? color, float scale)
+    private void AddRows(string text, SColor? color, float scale)
     {
-        float wrap = (Settings.Width - Pad * 2) / scale;
-        var line = "";
-        foreach (var word in text.Split(' '))
-        {
-            var next = line.Length == 0 ? word : line + " " + word;
-            if (line.Length > 0 && ImGui.CalcTextSize(next).X > wrap)
-            {
-                AddRow(line, color, scale);
-                next = word;
-            }
-            line = next;
-        }
-        AddRow(line, color, scale);
+        foreach (var line in Text.Wrap(text, Settings.Width - Pad * 2, scale))
+            _rows.Add((line, color, scale, ImGui.CalcTextSize(line) * scale));
     }
-
-    private void AddRow(string text, SColor? color, float scale) =>
-        _rows.Add((text, color, scale, ImGui.CalcTextSize(text) * scale));
 
     private unsafe void Draw()
     {
